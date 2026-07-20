@@ -1,0 +1,79 @@
+name: Cleanup PR Preview
+
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  cleanup:
+    name: Destroy PR preview
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: preview
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Validate and prepare preview name
+        id: guard
+        env:
+          BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
+        run: |
+          REGEX='^[A-Z][A-Z0-9]+-[0-9]+(-[a-z0-9]+(-[a-z0-9]+)*)?$'
+          if [[ "$BRANCH_NAME" =~ $REGEX ]] && (( ${#BRANCH_NAME} <= 40 )); then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "preview_name=$(tr '[:upper:]' '[:lower:]' <<<"$BRANCH_NAME")" >> "$GITHUB_OUTPUT"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "No preview was created for invalid branch: $BRANCH_NAME"
+          fi
+      - name: Install CDK dependencies
+        if: steps.guard.outputs.valid == 'true'
+        run: npm ci --prefix infra
+      - name: Build Go Lambda asset for CDK synthesis
+        if: steps.guard.outputs.valid == 'true'
+        run: |
+          mkdir -p dist/lambda
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -trimpath -ldflags="-s -w" -o dist/lambda/bootstrap ./cmd/lambda
+      - name: Destroy PR stack
+        if: steps.guard.outputs.valid == 'true'
+        working-directory: infra
+        env:
+          VPC_ID: ${{ vars.VPC_ID }}
+          DB_SECURITY_GROUP_ID: ${{ vars.DB_SECURITY_GROUP_ID }}
+          ACM_CERTIFICATE_ARN: ${{ vars.ACM_CERTIFICATE_ARN }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+          DB_SECRET_NAME: ${{ vars.DB_SECRET_NAME }}
+          CORS_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
+          PREVIEW_NAME: ${{ steps.guard.outputs.preview_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          npx cdk destroy "YyAwsSettingPr$PR_NUMBER" --force \
+            -c vpcId="$VPC_ID" \
+            -c databaseSecurityGroupId="$DB_SECURITY_GROUP_ID" \
+            -c certificateArn="$ACM_CERTIFICATE_ARN" \
+            -c baseDomain="$BASE_DOMAIN" \
+            -c databaseSecretName="$DB_SECRET_NAME" \
+            -c corsOrigins="$CORS_ORIGINS" \
+            -c environment=preview \
+            -c previewName="$PREVIEW_NAME" \
+            -c prNumber="$PR_NUMBER" \
+            -c imageTag=cleanup

@@ -1,0 +1,108 @@
+name: Deploy Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Test
+        run: go test ./...
+      - name: Detect production migration changes
+        id: db-guard
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          MIGRATION_CHANGED=false
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+            MIGRATION_CHANGED=true
+          else
+            CHANGED_FILES=$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA")
+            if grep -Eq '(^|/)(migrations?|schema)(/|$)|(^|/)schema\.(sql|go|json)$' <<<"$CHANGED_FILES"; then
+              MIGRATION_CHANGED=true
+            fi
+          fi
+          echo "migration_changed=$MIGRATION_CHANGED" >> "$GITHUB_OUTPUT"
+      - name: Install and check CDK
+        run: |
+          npm ci --prefix infra
+          npm run build --prefix infra
+      - name: Deploy shared foundation
+        working-directory: infra
+        env:
+          VPC_ID: ${{ vars.VPC_ID }}
+          DB_SECURITY_GROUP_ID: ${{ vars.DB_SECURITY_GROUP_ID }}
+          ACM_CERTIFICATE_ARN: ${{ vars.ACM_CERTIFICATE_ARN }}
+        run: |
+          npx cdk deploy YyAwsSettingFoundation --require-approval never \
+            -c vpcId="$VPC_ID" \
+            -c databaseSecurityGroupId="$DB_SECURITY_GROUP_ID" \
+            -c certificateArn="$ACM_CERTIFICATE_ARN"
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - name: Build and push application image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/yy-aws-setting:$IMAGE_TAG" .
+          docker push "$REGISTRY/yy-aws-setting:$IMAGE_TAG"
+      - name: Build Go Lambda asset
+        run: |
+          mkdir -p dist/lambda
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -trimpath -ldflags="-s -w" -o dist/lambda/bootstrap ./cmd/lambda
+      - name: Deploy production stack
+        working-directory: infra
+        env:
+          VPC_ID: ${{ vars.VPC_ID }}
+          DB_SECURITY_GROUP_ID: ${{ vars.DB_SECURITY_GROUP_ID }}
+          ACM_CERTIFICATE_ARN: ${{ vars.ACM_CERTIFICATE_ARN }}
+          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+          DB_SECRET_NAME: ${{ vars.DB_SECRET_NAME }}
+          CORS_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          npx cdk deploy YyAwsSettingProduction --require-approval never \
+            -c vpcId="$VPC_ID" \
+            -c databaseSecurityGroupId="$DB_SECURITY_GROUP_ID" \
+            -c certificateArn="$ACM_CERTIFICATE_ARN" \
+            -c baseDomain="$BASE_DOMAIN" \
+            -c databaseSecretName="$DB_SECRET_NAME" \
+            -c corsOrigins="$CORS_ORIGINS" \
+            -c environment=production \
+            -c imageTag="$IMAGE_TAG"
+      - name: Run production database migration
+        if: steps.db-guard.outputs.migration_changed == 'true'
+        run: bash .github/scripts/run-ecs-migration.sh yy-aws-setting yy-aws-setting-production

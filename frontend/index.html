@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="yuighjk 的个人主页与 Go on AWS 项目">
+  <title>yuighjk · Go on AWS</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="nav">
+      <a class="brand" href="#top" aria-label="返回首页">Y</a>
+      <nav aria-label="页面导航">
+        <a href="#about">关于</a>
+        <a href="#projects">项目</a>
+        <a href="#message">留言</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">GO · AWS · CLOUD NATIVE</p>
+          <h1 id="hero-title">你好，我是 <span id="profile-name">yuighjk</span>。</h1>
+          <p id="profile-bio" class="lead">正在从 GitHub 获取个人信息……</p>
+          <div class="actions">
+            <a id="github-link" class="button primary" href="https://github.com/yuighjk" target="_blank" rel="noreferrer">访问 GitHub</a>
+            <a class="button secondary" href="#message">给我留言</a>
+          </div>
+        </div>
+        <div class="portrait-wrap">
+          <div class="orbit" aria-hidden="true"></div>
+          <img id="avatar" class="portrait" src="https://github.com/yuighjk.png" alt="yuighjk 的 GitHub 头像">
+          <div id="availability" class="status"><span></span> Open to learning</div>
+        </div>
+      </section>
+
+      <section id="about" class="stats" aria-label="GitHub 数据">
+        <article><strong id="repo-count">--</strong><span>公开仓库</span></article>
+        <article><strong id="follower-count">--</strong><span>关注者</span></article>
+        <article><strong id="following-count">--</strong><span>正在关注</span></article>
+        <article><strong id="location">Earth</strong><span>所在地</span></article>
+      </section>
+
+      <section id="projects" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">CURRENT PROJECT</p>
+          <h2>把应用带到云上。</h2>
+        </div>
+        <div class="project-grid">
+          <article class="project-card featured">
+            <div><span class="tag">Go</span><span class="tag">Aurora</span><span class="tag">AWS</span></div>
+            <h3>Go on AWS</h3>
+            <p>使用 Go、Aurora PostgreSQL、ECR、ECS Fargate、ALB 和 Cloud Map 构建的云原生练习项目。</p>
+            <a href="https://github.com/yuighjk" target="_blank" rel="noreferrer">查看源码 <span aria-hidden="true">↗</span></a>
+          </article>
+          <article class="project-card architecture">
+            <p class="mono">REQUEST FLOW</p>
+            <ol>
+              <li><span>01</span> Cloudflare</li>
+              <li><span>02</span> Application Load Balancer</li>
+              <li><span>03</span> ECS Fargate · Go API</li>
+              <li><span>04</span> Aurora PostgreSQL</li>
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      <section id="message" class="section message-section">
+        <div class="section-heading">
+          <p class="eyebrow">AURORA POSTGRESQL</p>
+          <h2>留下一句话。</h2>
+          <p>这里的内容由 Go API 写入 Aurora PostgreSQL。</p>
+        </div>
+        <form id="note-form" class="note-form">
+          <label for="note-content">留言内容</label>
+          <div class="input-row">
+            <input id="note-content" name="content" maxlength="500" placeholder="很高兴认识你……" required>
+            <button class="button primary" type="submit">提交</button>
+          </div>
+          <p id="form-status" class="form-status" role="status"></p>
+        </form>
+        <div id="notes" class="notes" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <footer>
+      <span>© <span id="year"></span> yuighjk</span>
+      <span>Built with Go and curiosity.</span>
+    </footer>
+  </div>
+
+  <script src="./config.js"></script>
+  <script src="./app.js" defer></script>
+</body>
+</html>
