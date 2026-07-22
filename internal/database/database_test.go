@@ -24,6 +24,20 @@ func TestConfigURL(t *testing.T) {
 	}
 }
 
+func TestConfigURLReusesDatabaseURLAndAddsTLS(t *testing.T) {
+	cfg := Config{
+		ConnectionURL: "postgresql://postgres:secret@database.example:5432/postgres?application_name=test",
+		SSLMode:       "verify-full",
+		SSLRootCert:   "/app/global-bundle.pem",
+	}
+	got := cfg.URL()
+	for _, expected := range []string{"application_name=test", "sslmode=verify-full", "sslrootcert="} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("URL %q does not contain %q", got, expected)
+		}
+	}
+}
+
 func TestOpenWithoutPasswordDisablesDatabase(t *testing.T) {
 	pool, err := Open(context.Background(), Config{})
 	if err != nil {

@@ -11,7 +11,6 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   deploy:
@@ -33,7 +32,8 @@ jobs:
           cache-dependency-path: infra/package-lock.json
       - uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Test
         run: go test ./...
@@ -61,15 +61,7 @@ jobs:
           npm run build --prefix infra
       - name: Deploy shared foundation
         working-directory: infra
-        env:
-          VPC_ID: ${{ vars.VPC_ID }}
-          DB_SECURITY_GROUP_ID: ${{ vars.DB_SECURITY_GROUP_ID }}
-          ACM_CERTIFICATE_ARN: ${{ vars.ACM_CERTIFICATE_ARN }}
-        run: |
-          npx cdk deploy YyAwsSettingFoundation --require-approval never \
-            -c vpcId="$VPC_ID" \
-            -c databaseSecurityGroupId="$DB_SECURITY_GROUP_ID" \
-            -c certificateArn="$ACM_CERTIFICATE_ARN"
+        run: npx cdk deploy YyAwsSettingFoundation --require-approval never
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
       - name: Build and push application image
@@ -77,32 +69,18 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t "$REGISTRY/yy-aws-setting:$IMAGE_TAG" .
-          docker push "$REGISTRY/yy-aws-setting:$IMAGE_TAG"
-      - name: Build Go Lambda asset
-        run: |
-          mkdir -p dist/lambda
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -trimpath -ldflags="-s -w" -o dist/lambda/bootstrap ./cmd/lambda
+          docker build -t "$REGISTRY/yy-workflow/profile-go:$IMAGE_TAG" .
+          docker push "$REGISTRY/yy-workflow/profile-go:$IMAGE_TAG"
       - name: Deploy production stack
         working-directory: infra
         env:
-          VPC_ID: ${{ vars.VPC_ID }}
-          DB_SECURITY_GROUP_ID: ${{ vars.DB_SECURITY_GROUP_ID }}
-          ACM_CERTIFICATE_ARN: ${{ vars.ACM_CERTIFICATE_ARN }}
-          BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
-          DB_SECRET_NAME: ${{ vars.DB_SECRET_NAME }}
           CORS_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           npx cdk deploy YyAwsSettingProduction --require-approval never \
-            -c vpcId="$VPC_ID" \
-            -c databaseSecurityGroupId="$DB_SECURITY_GROUP_ID" \
-            -c certificateArn="$ACM_CERTIFICATE_ARN" \
-            -c baseDomain="$BASE_DOMAIN" \
-            -c databaseSecretName="$DB_SECRET_NAME" \
             -c corsOrigins="$CORS_ORIGINS" \
             -c environment=production \
             -c imageTag="$IMAGE_TAG"
       - name: Run production database migration
         if: steps.db-guard.outputs.migration_changed == 'true'
-        run: bash .github/scripts/run-ecs-migration.sh yy-aws-setting yy-aws-setting-production
+        run: bash .github/scripts/run-ecs-migration.sh yy-workflow-profile yy-aws-setting-production

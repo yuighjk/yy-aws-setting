@@ -27,6 +27,8 @@ var migrations embed.FS
 
 // Config 保存连接 PostgreSQL 所需的全部参数。
 type Config struct {
+	// ConnectionURL 可以直接复用 Secrets Manager 中已有的 PostgreSQL DATABASE_URL。
+	ConnectionURL string
 	// Host 是 Aurora/RDS Endpoint，不包含协议和端口。
 	Host string
 	// Port 是 PostgreSQL 端口，默认是 5432。
@@ -45,6 +47,25 @@ type Config struct {
 
 // URL 把 Config 转换成 pgx 能理解的 PostgreSQL URL。
 func (c Config) URL() string {
+	// 已有 Phase 2 Secret 保存的是 DATABASE_URL；在不复制密码的前提下，
+	// 为它补上当前容器要求的 RDS TLS 校验参数。
+	if strings.TrimSpace(c.ConnectionURL) != "" {
+		parsed, err := url.Parse(strings.TrimSpace(c.ConnectionURL))
+		if err != nil {
+			// 交给 pgxpool.ParseConfig 返回包含上下文的配置错误。
+			return c.ConnectionURL
+		}
+		query := parsed.Query()
+		if c.SSLMode != "" {
+			query.Set("sslmode", c.SSLMode)
+		}
+		if c.SSLRootCert != "" {
+			query.Set("sslrootcert", c.SSLRootCert)
+		}
+		parsed.RawQuery = query.Encode()
+		return parsed.String()
+	}
+
 	// 创建查询参数集合，最终会变成 URL 问号后面的参数。
 	query := url.Values{}
 	// 设置 sslmode，例如 verify-full 会同时校验证书和数据库主机名。
@@ -72,8 +93,8 @@ func (c Config) URL() string {
 
 // Open 创建并验证 PostgreSQL 连接池；调用者负责在程序退出时 Close。
 func Open(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
-	// 去掉密码前后空格后仍为空，表示开发者暂时没有启用数据库。
-	if strings.TrimSpace(cfg.Password) == "" {
+	// DATABASE_URL 和拆分字段两种配置都不存在时，表示暂时没有启用数据库。
+	if strings.TrimSpace(cfg.ConnectionURL) == "" && strings.TrimSpace(cfg.Password) == "" {
 		// 返回 nil 连接池和 nil 错误，让本地服务仍可启动，但数据库 API 会返回 503。
 		return nil, nil
 	}

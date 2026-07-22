@@ -36,7 +36,7 @@
         "ecr:PutImage",
         "ecr:UploadLayerPart"
       ],
-      "Resource": "arn:aws:ecr:ap-northeast-1:978184426686:repository/yy-aws-setting"
+      "Resource": "arn:aws:ecr:ap-northeast-1:978184426686:repository/yy-workflow/profile-go"
     },
     {
       "Sid": "RunAndInspectMigrationTasks",
@@ -52,7 +52,10 @@
       "Sid": "PassApplicationTaskRoles",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::978184426686:role/YyAwsSetting*",
+      "Resource": [
+        "arn:aws:iam::978184426686:role/yy-workflow-profile-ecs-task",
+        "arn:aws:iam::978184426686:role/yy-workflow-profile-ecs-execution"
+      ],
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "ecs-tasks.amazonaws.com"

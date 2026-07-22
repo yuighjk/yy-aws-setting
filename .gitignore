@@ -2,7 +2,7 @@
 .DS_Store
 .idea/
 .vscode/
-bin/
+/bin/
 coverage.out
 *.log
 node_modules/

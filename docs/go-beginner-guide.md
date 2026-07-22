@@ -252,6 +252,15 @@ err := a.db.QueryRow(r.Context(), "SELECT ... WHERE id = $1", id).Scan(&value)
 
 始终使用 `$1`、`$2` 参数，不要把用户输入直接拼接进 SQL。
 
+Go pgx
+  → Aurora Endpoint
+  → PostgreSQL 5432
+  → 执行 migration SQL
+  → 在 Aurora 中创建表
+
+它和 Prisma migration 的目录结构相似，但没有 Prisma 那种自动生成 SQL、迁移历史表、按顺序执行和防止重复执行的能力。当前 CREATE TABLE IF NOT EXISTS 只能保证第一份 SQL重复执行不报错。
+更正式的 Go 项目建议使用 goose、golang-migrate 或 Atlas，自动按编号执行并记录已应用版本。
+
 ## 6. Go 与 Docker 是什么关系
 
 Go 并不是“连接 Docker”。Docker 的作用是把 Go 程序和运行所需文件包装成一个镜像：

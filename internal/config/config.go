@@ -42,13 +42,14 @@ func Load() (Config, error) {
 		CORSAllowedOrigins: origins,
 		AutoMigrate:        autoMigrate,
 		Database: database.Config{
-			Host:        env("RDSHOST", "database-workflow-instance-1.c5240eqqsji3.ap-northeast-1.rds.amazonaws.com"),
-			Port:        env("DB_PORT", "5432"),
-			Name:        env("DB_NAME", "postgres"),
-			User:        env("DB_USER", "postgres"),
-			Password:    os.Getenv("DB_PASSWORD"),
-			SSLMode:     env("DB_SSLMODE", "verify-full"),
-			SSLRootCert: sslRootCert,
+			ConnectionURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
+			Host:          env("RDSHOST", "database-workflow-instance-1.c5240eqqsji3.ap-northeast-1.rds.amazonaws.com"),
+			Port:          env("DB_PORT", "5432"),
+			Name:          env("DB_NAME", "postgres"),
+			User:          env("DB_USER", "postgres"),
+			Password:      os.Getenv("DB_PASSWORD"),
+			SSLMode:       env("DB_SSLMODE", "verify-full"),
+			SSLRootCert:   sslRootCert,
 		},
 	}, nil
 }

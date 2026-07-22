@@ -96,8 +96,8 @@ docker run --rm -p 8080:8080 --env-file .env yy-go-app:local
 ## 上传 Cloudflare Pages
 
 1. 确认 GitHub 个人资料能够正常显示。
-2. 后端上线后，将 `frontend/config.js` 中的 `API_BASE_URL` 改成后端 HTTPS 地址。
-3. 将最终的 Cloudflare Pages 域名加入后端的 `CORS_ALLOWED_ORIGINS`，例如 `https://your-project.pages.dev`。
+2. `frontend/config.js` 已指向现有 API Gateway 的 production 路径。
+3. 可将最终的 Cloudflare Pages 域名加入 `CORS_ALLOWED_ORIGINS`；现有 API Gateway 当前也会返回通配 CORS。
 4. 上传 `frontend` 目录中的文件；这是纯静态站点，不需要构建命令。
 
 如果通过 GitHub 连接 Cloudflare Pages：
@@ -112,8 +112,8 @@ docker run --rm -p 8080:8080 --env-file .env yy-go-app:local
 - 容器端口：`8080`
 - ALB health check：`/health`
 - ECS 环境变量：除密码外使用 `.env.example` 对应的值
-- `DB_PASSWORD`：通过 AWS Secrets Manager 注入，不要放在 Task Definition 明文环境变量中
+- `DATABASE_URL`：从现有 AWS Secrets Manager Secret 注入，不要放在 Task Definition 明文环境变量中
 - Aurora 安全组：允许 ECS Task 安全组访问 TCP 5432
 - ECS Task 必须能够访问 GitHub API、Aurora 和 CloudWatch Logs
 
-Cloudflare Pages 与 ALB 后端属于不同源，所以正式上线前必须同时配置 HTTPS 和 `CORS_ALLOWED_ORIGINS`。
+Cloudflare Pages 与 API Gateway 属于不同源；HTTPS 由 API Gateway 自动管理，不需要 ACM。完整复用架构见部署指南。
