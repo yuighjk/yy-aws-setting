@@ -252,6 +252,18 @@ err := a.db.QueryRow(r.Context(), "SELECT ... WHERE id = $1", id).Scan(&value)
 
 始终使用 `$1`、`$2` 参数，不要把用户输入直接拼接进 SQL。
 
+迁移程序先读取 SQL 文件，再由 `pool.Exec` 通过 PostgreSQL 连接把 SQL 发送给 Aurora 执行：
+
+```go
+data, err := migrations.ReadFile("migrations/001_create_notes.sql")
+if err != nil {
+    return fmt.Errorf("read migration: %w", err)
+}
+if _, err := pool.Exec(ctx, string(data)); err != nil {
+    return fmt.Errorf("run migration: %w", err)
+}
+```
+
 Go pgx
   → Aurora Endpoint
   → PostgreSQL 5432

@@ -4,7 +4,9 @@
 
 如果刚开始学习 Go，请先阅读 [`docs/go-beginner-guide.md`](docs/go-beginner-guide.md)。其中说明了 Go 安装、项目启动、业务接口、PostgreSQL、Docker 和 ECS 之间的关系；`main.go`、`database.go`、`api.go` 也已经添加逐行中文注释。
 
-AWS 控制台、CDK、GitHub OIDC、Jira Guard、DB Guard、PR Preview 和生产部署请阅读 [`docs/aws-console-and-cicd.md`](docs/aws-console-and-cicd.md)。
+AWS 控制台、CDK、GitHub Actions、Jira Guard、DB Guard、PR Preview 和生产部署请阅读 [`docs/aws-console-and-cicd.md`](docs/aws-console-and-cicd.md)。
+
+当前项目为什么复用 API Gateway、Lambda BFF、私有 ALB、ECS 和 Aurora，以及 migration、PR Preview、production 之间的关系，请阅读 [`docs/aws-architecture-design.md`](docs/aws-architecture-design.md)。
 
 ## 目录
 
