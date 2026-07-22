@@ -142,7 +142,6 @@ Settings → Secrets and variables → Actions → Variables，添加：
 
 | Variable | Value |
 |---|---|
-| `AWS_REGION` | `ap-northeast-1` |
 | `VPC_ID` | `vpc-06e535e0d55e64fdd` |
 | `DB_SECURITY_GROUP_ID` | `sg-0fa1f22a2b4e37550` |
 | `DB_SECRET_NAME` | `yy-aws-setting/database` |
