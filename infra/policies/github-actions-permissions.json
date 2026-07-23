@@ -54,7 +54,8 @@
       "Action": "iam:PassRole",
       "Resource": [
         "arn:aws:iam::978184426686:role/yy-workflow-profile-ecs-task",
-        "arn:aws:iam::978184426686:role/yy-workflow-profile-ecs-execution"
+        "arn:aws:iam::978184426686:role/yy-workflow-profile-ecs-execution",
+        "arn:aws:iam::978184426686:role/yy-aws-setting-*-task"
       ],
       "Condition": {
         "StringEquals": {

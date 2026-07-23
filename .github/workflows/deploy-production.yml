@@ -59,9 +59,13 @@ jobs:
         run: |
           npm ci --prefix infra
           npm run build --prefix infra
-      - name: Deploy shared foundation
+      - name: Deploy shared messaging and foundation
         working-directory: infra
-        run: npx cdk deploy YyAwsSettingFoundation --require-approval never
+        run: |
+          npx cdk deploy \
+            YyAwsSettingMessaging \
+            YyAwsSettingFoundation \
+            --require-approval never
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
       - name: Build and push application image

@@ -2,6 +2,8 @@ import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as sns from "aws-cdk-lib/aws-sns";
 import { Construct } from "constructs";
 import { FoundationStack } from "./foundation-stack";
 
@@ -19,6 +21,8 @@ export interface ApplicationStackProps extends cdk.StackProps {
   pathPrefix: string;
   /** 后端仍保留自身 CORS 白名单；现有 API Gateway 也会添加 CORS 响应。 */
   corsOrigins: string;
+  /** Shared business event topic; each app task may only publish to this topic. */
+  noteEventsTopic: sns.ITopic;
 }
 
 /** 创建当前环境独享的 Task Definition、ECS Service、Target Group 和 ALB Rule。 */
@@ -36,12 +40,20 @@ export class ApplicationStack extends cdk.Stack {
       throw new Error(`Invalid ALB listener priority: ${props.listenerPriority}`);
     }
 
-    // 复用现有 ECS Task/Execution Role，不额外创建 IAM Role。
+    // The application gets its own least-privilege Task Role. The existing
+    // Execution Role is still reused for ECR, Secret and CloudWatch Logs.
+    const taskRole = new iam.Role(this, "ApplicationTaskRole", {
+      roleName: `yy-aws-setting-${props.environmentName}-task`,
+      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+      description: `Task permissions for yy-aws-setting ${props.environmentName}`,
+    });
+    props.noteEventsTopic.grantPublish(taskRole);
+
     const taskDefinition = new ecs.FargateTaskDefinition(this, "TaskDefinition", {
       family: `yy-aws-setting-${props.environmentName}`,
       cpu: 256,
       memoryLimitMiB: 512,
-      taskRole: props.foundation.taskRole,
+      taskRole,
       executionRole: props.foundation.executionRole,
       runtimePlatform: {
         cpuArchitecture: ecs.CpuArchitecture.X86_64,
@@ -60,6 +72,8 @@ export class ApplicationStack extends cdk.Stack {
         PORT: "8080",
         AUTO_MIGRATE: "false",
         GITHUB_USERNAME: "yuighjk",
+        ENVIRONMENT_NAME: props.environmentName,
+        NOTE_EVENTS_TOPIC_ARN: props.noteEventsTopic.topicArn,
         DB_SSLMODE: "verify-full",
         DB_SSLROOTCERT: "/app/global-bundle.pem",
         CORS_ALLOWED_ORIGINS: props.corsOrigins,

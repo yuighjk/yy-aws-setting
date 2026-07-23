@@ -21,7 +21,7 @@ Dockerfile                  ECS Fargate 容器镜像
 
 ## 本地准备
 
-- Go 1.23 或更高版本
+- Go 1.24 或更高版本
 - PostgreSQL 命令行工具（仅在需要手动检查数据库时使用）
 - Docker（可选）
 

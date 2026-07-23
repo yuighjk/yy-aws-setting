@@ -14,6 +14,8 @@ type Config struct {
 	Port               string
 	GitHubUsername     string
 	GitHubToken        string
+	EnvironmentName    string
+	NoteEventsTopicARN string
 	CORSAllowedOrigins []string
 	AutoMigrate        bool
 	Database           database.Config
@@ -39,6 +41,8 @@ func Load() (Config, error) {
 		Port:               port,
 		GitHubUsername:     env("GITHUB_USERNAME", "yuighjk"),
 		GitHubToken:        os.Getenv("GITHUB_TOKEN"),
+		EnvironmentName:    env("ENVIRONMENT_NAME", "local"),
+		NoteEventsTopicARN: strings.TrimSpace(os.Getenv("NOTE_EVENTS_TOPIC_ARN")),
 		CORSAllowedOrigins: origins,
 		AutoMigrate:        autoMigrate,
 		Database: database.Config{

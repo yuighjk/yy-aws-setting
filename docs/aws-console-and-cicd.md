@@ -98,27 +98,13 @@ AWS Console → Secrets Manager → Store a new secret：
 
 ECS Task Definition 只保存 Secret 引用，不会把密码明文写入 GitHub 或 CDK 文件。
 
-## 4. ACM HTTPS 证书与 Cloudflare
+## 4. 当前架构不需要 ACM 证书
 
-确定真实域名后，AWS Console → Certificate Manager，Region 必须选择东京：
+当前 Cloudflare Pages 地址 `https://yy-aws-setting.pages.dev` 的 HTTPS 由 Cloudflare 管理；浏览器请求的 API Gateway `execute-api` 地址也自带 AWS 管理的 HTTPS。internal ALB 只在 VPC 内接收 Lambda BFF 的 HTTP 请求，因此不需要公网域名、Cloudflare CNAME、443 Listener 或 ACM 证书。
 
-1. Request certificate → Public certificate。
-2. 添加：
-   - `api.yourdomain.com`
-   - `*.preview.yourdomain.com`
-3. Validation method：DNS validation。只有非AWS才启动导出。
-4. 在 Cloudflare DNS 中添加 ACM 给出的 CNAME 验证记录。
-5. 验证 CNAME 设置为 DNS only，等待 ACM 状态变成 Issued。
-6. 复制 Certificate ARN，稍后填写 GitHub Variable `ACM_CERTIFICATE_ARN`。
+只有以后购买并实际控制一个域名、希望把 API Gateway 改成 `api.yourdomain.com` 时，才在东京区为该真实域名申请 ACM，并把 Cloudflare DNS 验证 CNAME 原样设为 DNS only。`example.com` 只是文档占位域名，不属于当前用户，无法完成 DNS 验证；`*.preview.example.com` 也不会因为换到美国区而自动签发。
 
-CDK 创建 ALB 后，在 CloudFormation `YyAwsSettingFoundation` Outputs 中复制 `LoadBalancerDnsName`，再到 Cloudflare 添加：
-
-| Type | Name | Target | Proxy |
-|---|---|---|---|
-| CNAME | `api` | ALB DNS | Proxied |
-| CNAME | `*.preview` | ALB DNS | Proxied |
-
-Cloudflare SSL/TLS mode 设为 `Full (strict)`。
+自定义 API 域名应连接 API Gateway Custom domain，而不是把 Cloudflare 指向 internal ALB。
 
 ## 5. GitHub Actions：使用 Access Key 部署
 
@@ -130,6 +116,13 @@ Cloudflare SSL/TLS mode 设为 `Full (strict)`。
 两项缺一不可。不要使用 root Access Key；应创建只供本仓库部署的 IAM 用户，并按实际 CDK 资源收敛权限。泄露或作业结束后立即停用并轮换密钥。
 
 ## 6. GitHub 网页设置
+
+Preview 与 production 不是一个 PR 同时拥有的两种状态：
+  PR 创建或更新 → 部署到 preview
+  PR 合并到 main → 部署到 production
+  PR 关闭 → 自动删除对应 Preview
+Preview 的价值是让每个开发者、每个 PR 都有独立 ECS Service、镜像 Tag、Target Group 和测试 URL，互不覆盖；production 始终保持稳定，并可配置审批保护。
+需要注意：Preview 和 production 当前仍共享 Aurora，所以数据库 migration 必须向后兼容。
 
 GitHub Repository → Settings → Environments，创建：
 
@@ -262,24 +255,23 @@ DB Guard ───┘                              │
 
 ## 10. 推荐的 CDK 首次部署
 
-完成 Secrets Manager、ACM、OIDC 和 GitHub Variables 后，可以让 Actions 首次部署，也可以本地先创建 Foundation：
+当前项目复用账号中已有 VPC、internal ALB、ECR、ECS Cluster 和 Aurora。安装依赖后先部署消息资源和 Foundation：
 
 ```bash
 cd infra
 npm ci
-npx cdk deploy YyAwsSettingFoundation --require-approval never \
-  -c vpcId=vpc-06e535e0d55e64fdd \
-  -c databaseSecurityGroupId=sg-0fa1f22a2b4e37550 \
-  -c certificateArn=你的ACM证书ARN
+npx cdk deploy \
+  YyAwsSettingMessaging \
+  YyAwsSettingFoundation \
+  --require-approval never
 ```
 
-Foundation 创建应用长期共享资源 完成后会得到：
+Foundation 导入共享资源，并创建当前项目的 BFF Version/Alias、CodeDeploy Group 和 API Gateway 路由。它不会重复创建以下收费基础设施：
 
-- ECR：`yy-aws-setting`
-- ECS Cluster：`yy-aws-setting`
-- ALB：`yy-aws-setting`
-- Cloud Map Namespace：`yy.internal`
-- ECS、Lambda、ALB 安全组
+- ECR：`yy-workflow/profile-go`
+- ECS Cluster：`yy-workflow-profile`
+- internal ALB：`yy-workflow-profile-internal`
+- Aurora 与已有安全组
 
 之后每个 PR 创建独立的 Application Stack：
 共享 Foundation
@@ -368,11 +360,10 @@ EC2 → Target Groups：
 EC2 → Load Balancers：
 
 - Type：Application Load Balancer
-- Scheme：Internet-facing
-- Subnets：默认 VPC 至少两个可用区
-- Security Group：只开放 80、443
-- HTTPS 443：选择 ACM 证书
-- HTTP 80：Redirect HTTPS 443
+- Scheme：Internal
+- Subnets：VPC 内至少两个私有子网
+- Security Group：80 只允许 Lambda BFF Security Group
+- Listener：HTTP 80；VPC 内这一跳不配置公网证书
 
 ECS → Cluster → Create service：
 
@@ -384,7 +375,7 @@ ECS → Cluster → Create service：
 - Load balancer：选择上面的 ALB 和 IP Target Group
 - Service discovery：`api-production.yy.internal`
 
-任务没有公网 IP，出站通过现有 NAT Gateway 拉取 ECR 镜像和访问 GitHub；公网只能经过 ALB。后续还应把 Aurora 的 `Publicly accessible` 改为关闭，并评估用 ECR、Logs、Secrets Manager VPC Endpoints 替代部分 NAT 流量。
+任务没有公网 IP，出站通过现有 NAT Gateway 拉取 ECR 镜像和访问 GitHub；公网请求只能先经过 API Gateway 和 Lambda BFF，再进入 internal ALB。后续还应把 Aurora 的 `Publicly accessible` 改为关闭，并评估用 ECR、Logs、Secrets Manager VPC Endpoints 替代部分 NAT 流量。
 
 ### 11.6 Go Lambda
 

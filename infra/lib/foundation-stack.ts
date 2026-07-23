@@ -1,6 +1,9 @@
+import * as path from "node:path";
 import * as cdk from "aws-cdk-lib";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as codedeploy from "aws-cdk-lib/aws-codedeploy";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as ecs from "aws-cdk-lib/aws-ecs";
@@ -25,8 +28,6 @@ export interface FoundationStackProps extends cdk.StackProps {
   albSecurityGroupId: string;
   /** ECS Task 共用的 Security Group ID。 */
   ecsSecurityGroupId: string;
-  /** 已有 ECS Task Role ARN。 */
-  taskRoleArn: string;
   /** 已有 ECS Execution Role ARN。 */
   executionRoleArn: string;
   /** 包含 DATABASE_URL 字段的 Secrets Manager 完整 ARN。 */
@@ -35,8 +36,14 @@ export interface FoundationStackProps extends cdk.StackProps {
   logGroupName: string;
   /** 已有 API Gateway HTTP API ID。 */
   httpApiId: string;
-  /** 已有 Lambda BFF ARN。 */
-  bffFunctionArn: string;
+  /** Lambda BFF 使用的现有 Security Group ID。 */
+  bffSecurityGroupId: string;
+  /** Lambda BFF 在 VPC 内调用的 internal ALB DNS。 */
+  internalAlbDnsName: string;
+  /** 记录在响应头中，并在变化时发布新的 Lambda Version。 */
+  bffRelease: string;
+  /** Synthetics 失败时 CodeDeploy 停止并回滚 BFF 灰度。 */
+  rollbackAlarm?: cloudwatch.IAlarm;
 }
 
 /**
@@ -49,7 +56,6 @@ export class FoundationStack extends cdk.Stack {
   public readonly cluster: ecs.ICluster;
   public readonly httpListener: elbv2.IApplicationListener;
   public readonly ecsSecurityGroup: ec2.ISecurityGroup;
-  public readonly taskRole: iam.IRole;
   public readonly executionRole: iam.IRole;
   public readonly databaseSecret: secretsmanager.ISecret;
   public readonly logGroup: logs.ILogGroup;
@@ -91,9 +97,8 @@ export class FoundationStack extends cdk.Stack {
       },
     );
 
-    // 复用已有 Task/Execution Role。它们已经具备拉取共享 ECR、读取数据库
+    // 复用已有 Execution Role。它已经具备拉取共享 ECR、读取数据库
     // Secret 和写入共享日志组的权限，不把 CDK Bootstrap Role 当成 ECS Role。
-    this.taskRole = iam.Role.fromRoleArn(this, "ExistingTaskRole", props.taskRoleArn, { mutable: false });
     this.executionRole = iam.Role.fromRoleArn(this, "ExistingExecutionRole", props.executionRoleArn, {
       mutable: false,
     });
@@ -104,16 +109,78 @@ export class FoundationStack extends cdk.Stack {
     );
     this.logGroup = logs.LogGroup.fromLogGroupName(this, "ExistingLogGroup", props.logGroupName);
 
-    // 导入现有 API Gateway 与 Lambda BFF。BFF 会把原始路径转发到私有 ALB。
+    // BFF SG 已经只允许向 internal ALB 的 80 端口出站。
+    const bffSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(
+      this,
+      "ExistingBffSecurityGroup",
+      props.bffSecurityGroupId,
+      { mutable: false },
+    );
+
+    // 当前项目管理自己的 BFF Function/Version/live Alias。API Gateway 始终
+    // 调用 live Alias，CodeDeploy 在新 Version 发布时执行 10%/5分钟灰度。
+    // CDK 实现灰度的方式是创建 Deployment Group，指定 live Alias、灰度配置和告警：
+    /**
+     * 1. live Alias 当前指向旧 Version。
+     * 2. 代码或 BFF_RELEASE 变化后发布新 Version。
+     * 3. CodeDeploy 先把 10% 请求转给新 Version，观察 5 分钟。
+     * 4. 无告警则切到 100%；有告警则回滚旧 Version。
+     */
+    const bffFunction = new lambda.Function(this, "CanaryBffFunction", {
+      functionName: "yy-aws-setting-bff",
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset(path.join(__dirname, "../lambda/bff")),
+      timeout: cdk.Duration.seconds(15),
+      memorySize: 256,
+      vpc: this.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [bffSecurityGroup],
+      environment: {
+        PROFILE_GO_BASE_URL: `http://${props.internalAlbDnsName}`,
+        BFF_RELEASE: props.bffRelease,
+      },
+      logGroup: new logs.LogGroup(this, "CanaryBffLogGroup", {
+        logGroupName: "/aws/lambda/yy-aws-setting-bff",
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+    const bffAlias = new lambda.Alias(this, "CanaryBffLiveAlias", {
+      aliasName: "live",
+      version: bffFunction.currentVersion,
+      description: `Live BFF traffic for release ${props.bffRelease}`,
+    });
+    const bffErrorAlarm = new cloudwatch.Alarm(this, "CanaryBffErrorAlarm", {
+      alarmName: "yy-aws-setting-bff-errors",
+      alarmDescription: "The live BFF alias returned one or more Lambda invocation errors.",
+      metric: bffAlias.metricErrors({ period: cdk.Duration.minutes(1), statistic: "Sum" }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      datapointsToAlarm: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    new codedeploy.LambdaDeploymentGroup(this, "CanaryBffDeploymentGroup", {
+      deploymentGroupName: "yy-aws-setting-bff-canary",
+      alias: bffAlias,
+      // 先切 10% 到新 Version，等待 5 分钟，再一次性切完剩余 90%。
+      deploymentConfig: codedeploy.LambdaDeploymentConfig.CANARY_10PERCENT_5MINUTES,
+      alarms: [bffErrorAlarm, ...(props.rollbackAlarm ? [props.rollbackAlarm] : [])],
+      autoRollback: {
+        failedDeployment: true,
+        stoppedDeployment: true,
+        deploymentInAlarm: true,
+      },
+    });
+
+    // 导入现有 API Gateway，并把当前项目的 routes 更新为 live Alias。
     const httpApi = apigwv2.HttpApi.fromHttpApiAttributes(this, "ExistingHttpApi", {
       httpApiId: props.httpApiId,
       apiEndpoint: `https://${props.httpApiId}.execute-api.${this.region}.${this.urlSuffix}`,
     });
-    const bffFunction = lambda.Function.fromFunctionAttributes(this, "ExistingBffFunction", {
-      functionArn: props.bffFunctionArn,
-      sameEnvironment: true,
-    });
-    const bffIntegration = new integrations.HttpLambdaIntegration("ExistingBffIntegration", bffFunction, {
+    const bffIntegration = new integrations.HttpLambdaIntegration("CanaryBffIntegration", bffAlias, {
       // 两条路由共用一个宽度受限于此 API 的 Lambda invoke permission。
       scopePermissionToRoute: false,
     });
@@ -134,5 +201,7 @@ export class FoundationStack extends cdk.Stack {
     new cdk.CfnOutput(this, "PublicApiEndpoint", { value: this.publicApiEndpoint });
     new cdk.CfnOutput(this, "ReusedRepositoryUri", { value: this.repository.repositoryUri });
     new cdk.CfnOutput(this, "ReusedClusterName", { value: this.cluster.clusterName });
+    new cdk.CfnOutput(this, "BffLiveAliasArn", { value: bffAlias.functionArn });
+    new cdk.CfnOutput(this, "BffDeploymentConfig", { value: "Canary10Percent5Minutes" });
   }
 }

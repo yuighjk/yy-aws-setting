@@ -26,6 +26,8 @@ import (
 	"github.com/yuighjk/yy-aws-setting/internal/database"
 	// httpapi 是本项目注册路由和编写业务接口的包。
 	"github.com/yuighjk/yy-aws-setting/internal/httpapi"
+	// messaging 初始化 SNS 事件发布器；没有 Topic ARN 时使用 no-op 实现。
+	"github.com/yuighjk/yy-aws-setting/internal/messaging"
 	// 右括号结束 import 区域。
 )
 
@@ -43,11 +45,16 @@ func main() {
 		os.Exit(1)
 		// 右花括号结束配置错误判断。
 	}
-
 	// 创建一个最多持续 15 秒的上下文，限制连接数据库和建表不能无限等待。
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	// main 函数结束前调用 cancel，释放这个上下文占用的计时器资源。
 	defer cancel()
+	// 由环境变量决定是否把 NoteCreated 事件发布到 SNS。
+	publisher, err := messaging.New(ctx, cfg.NoteEventsTopicARN)
+	if err != nil {
+		logger.Error("SNS publisher initialization failed", "error", err)
+		os.Exit(1)
+	}
 
 	// 使用配置连接 Aurora PostgreSQL；如果未设置 DB_PASSWORD，db 会是 nil。
 	db, err := database.Open(ctx, cfg.Database)
@@ -85,7 +92,7 @@ func main() {
 	}
 
 	// 把配置、数据库连接池和日志器交给 API 层，API 层会返回一个总的 HTTP Handler。
-	handler := httpapi.New(cfg, db, logger)
+	handler := httpapi.New(cfg, db, logger, publisher)
 	// 创建 HTTP Server；这个对象以后会监听端口并把请求交给 handler。
 	server := &http.Server{
 		// Addr 指定监听端口，例如 cfg.Port 为 8080 时结果是 :8080。

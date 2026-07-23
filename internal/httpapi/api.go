@@ -5,8 +5,12 @@ package httpapi
 import (
 	// context 用于限制数据库健康检查最多执行多长时间。
 	"context"
+	// crypto/rand 生成不可预测的事件 ID，供异步消费者幂等处理。
+	"crypto/rand"
 	// json 用于把 Go 数据转换成 JSON，也用于解析浏览器提交的 JSON。
 	"encoding/json"
+	// hex 把随机事件 ID编码成可记录的字符串。
+	"encoding/hex"
 	// fmt 用于把 GitHub 的 HTTP 状态码拼进错误信息。
 	"fmt"
 	// slog 用于记录请求日志和业务错误。
@@ -22,6 +26,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	// config 提供统一的应用配置类型。
 	"github.com/yuighjk/yy-aws-setting/internal/config"
+	// messaging 定义 SNS 事件发布接口。
+	"github.com/yuighjk/yy-aws-setting/internal/messaging"
 	// 右括号结束 import 区域。
 )
 
@@ -35,6 +41,8 @@ type API struct {
 	logger *slog.Logger
 	// client 是调用 GitHub API 的 HTTP 客户端，它带有超时设置。
 	client *http.Client
+	// publisher 在数据库写入成功后发布异步 NoteCreated 事件。
+	publisher messaging.Publisher
 }
 
 // note 对应数据库中的一条 profile_notes 记录，同时也是返回给前端的 JSON 数据。
@@ -48,7 +56,11 @@ type note struct {
 }
 
 // New 是 API 层的构造函数：接收依赖、注册路由、组合中间件并返回总 Handler。
-func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) http.Handler {
+func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger, publishers ...messaging.Publisher) http.Handler {
+	publisher := messaging.Publisher(messaging.NoopPublisher{})
+	if len(publishers) > 0 && publishers[0] != nil {
+		publisher = publishers[0]
+	}
 	// 创建 API 指针，使后面的所有处理函数都能访问相同的配置、数据库和日志器。
 	api := &API{
 		// 保存 main 传进来的应用配置。
@@ -58,7 +70,8 @@ func New(cfg config.Config, db *pgxpool.Pool, logger *slog.Logger) http.Handler 
 		// 保存 main 传进来的结构化日志器。
 		logger: logger,
 		// GitHub 请求最多等待 8 秒，避免外部服务异常时一直占用连接。
-		client: &http.Client{Timeout: 8 * time.Second},
+		client:    &http.Client{Timeout: 8 * time.Second},
+		publisher: publisher,
 	}
 
 	// 创建 Go 1.22+ 标准库路由器 ServeMux。
@@ -275,6 +288,25 @@ func (a *API) createNote(w http.ResponseWriter, r *http.Request) {
 		// 结束当前请求。
 		return
 		// 右花括号结束写入错误判断。
+	}
+	// 数据库写入成功后再发布事件；发布失败不会撤销已经提交的 INSERT，
+	// 否则用户会看到失败但数据库仍可能已经保存留言。
+	eventID := make([]byte, 16)
+	if _, randomErr := rand.Read(eventID); randomErr != nil {
+		a.logger.Error("create note event id failed", "error", randomErr)
+	} else {
+		publishCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+		defer cancel()
+		if publishErr := a.publisher.PublishNoteCreated(publishCtx, messaging.NoteCreatedEvent{
+			EventID:     hex.EncodeToString(eventID),
+			EventType:   "NoteCreated",
+			NoteID:      created.ID,
+			Content:     created.Content,
+			CreatedAt:   created.CreatedAt,
+			Environment: a.cfg.EnvironmentName,
+		}); publishErr != nil {
+			a.logger.Error("publish note event failed", "error", publishErr, "note_id", created.ID)
+		}
 	}
 	// 返回 201 Created 和数据库生成的留言对象。
 	writeJSON(w, http.StatusCreated, created)
